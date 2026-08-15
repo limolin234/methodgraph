@@ -4,16 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
-Environment=METHODGRAPH_DB=/path/to/methodgraph.db
-Environment=METHODGRAPH_TRANSPORT=streamable-http
-Environment=METHODGRAPH_HOST=127.0.0.1
-Environment=METHODGRAPH_PORT=8765
-Environment=METHODGRAPH_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
-Environment=METHODGRAPH_EMBEDDING_DEVICE=cuda
+Environment=METHODGRAPH_CONFIG=/path/to/config.toml
 Environment=HF_HUB_OFFLINE=1
 Environment=HF_DATASETS_OFFLINE=1
 Environment=TRANSFORMERS_OFFLINE=1
-ExecStart=/path/to/methodgraph-env/bin/methodgraph-mcp
+ExecStart=/path/to/methodgraph-env/bin/methodgraph-server
 Restart=on-failure
 RestartSec=3
 

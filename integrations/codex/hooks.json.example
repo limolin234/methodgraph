@@ -7,9 +7,9 @@
           {
             "type": "command",
             "command": "/path/to/methodgraph-env/bin/methodgraph-hook",
-            "timeout": 35,
+            "timeout": 10,
             "statusMessage": "Retrieving methodologies",
-            "additionalContextLimit": 5000
+            "additionalContextLimit": 10000
           }
         ]
       }

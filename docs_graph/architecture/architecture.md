@@ -1,30 +1,38 @@
 # 实现架构
 
-## 两种入口，一套检索
+## 权威边界
 
-`methodgraph-mcp` 运行只读 MCP，默认支持 stdio，也支持绑定本机的 streamable HTTP。Codex 的 `UserPromptSubmit` Hook 通过同一个 HTTP 服务搜索并把文本放进 `hookSpecificOutput.additionalContext`；HTTP 不可用时 Hook 自动降级为本地无 embedding 词法检索并失败开放。MCP 用于任务中途的主动搜索、细则读取和邻图探索。
+Git HEAD 是来源、方法和关系的唯一权威。内容仓库一对象一文件：`sources/<id>.md`、`methods/<id>.md`、`relations/<id>.md`。Markdown frontmatter 保存结构化索引字段，正文保存来源原文或第二层 Detail。
 
-常驻 HTTP 服务让 Hook 与 MCP 共用 embedding 模型和 SQLite 连接。跨平台环境也可以分别启动 stdio MCP 和本地 Hook；transport、数据库和模型都由环境变量配置。
+SQLite 只保存当前结构化投影、embedding 向量、`indexed_commit`、激活与冷却事件。启动时若 Git HEAD 与 `indexed_commit` 不同，先校验引用再原子替换结构投影。同步失败时不能推进 `indexed_commit`，更不能让 SQLite 反写 Git。
 
-## 权威存储
+## 写入与回滚
 
-SQLite 的 `mg_methods`、`mg_relations` 是当前投影；`mg_revisions` 保存每次 create/update/retire/restore 的完整快照、事务号、actor、权限、原因和时间；`mg_sources` 按 SHA-256 内容去重且不原地修改；`mg_activation_events` 保存检索/注入账本。embedding 表是可重建投影，revision 改变后旧投影自动失效。
+```text
+admin MCP/HTTP
+  -> validate identity, fields, references, expected revision
+  -> serialize under one process lock
+  -> Git commit (client Author, server Committer)
+  -> optional fast-forward push
+  -> synchronous structured projection refresh
+  -> asynchronous embedding refresh
+```
 
-每次写入在数据库事务中完成。没有物理删除接口。恢复是从历史快照产生一次新的 update/restore，因此审计链不会被改写；严重事故使用 SQLite/WAL 的备份恢复。批量导入可以在上层复用 transaction_ref 做整批追踪。
+客户端不接触内容仓库。`expected_revision` 使用当前文件 blob revision 做乐观并发控制。删除文件代表退役；删除方法前必须先删除连接它的关系。恢复读取历史 commit 中的文件并产生新的 restore commit，禁止 reset、force-push 和让数据库覆盖 Git。
 
-## 检索
+当前身份是审计归因，不是安全认证。实验室部署依赖可信网络与最小化管理 MCP 暴露；公网部署前必须另加认证和授权层。
+
+## 读取
 
 ```text
 current context
-  -> lexical + optional local embedding seed retrieval
+  -> lexical + optional embedding seed retrieval
   -> relevance threshold
-  -> exact/revision/semantic/session de-duplication
-  -> bounded one-hop weighted graph expansion
-  -> compact cards + brief edges + compact citations
+  -> revision/session/semantic de-duplication
+  -> bounded one-hop graph expansion
+  -> compact cards + brief edges + sources
 ```
 
-默认最多六张卡和两条邻边预算，实际不足不凑数。Hook 使用更严格阈值；相同 session、method、revision 的近期注入默认冷却，版本更新或 `exclude_recent=false` 才重新返回。模型永远看不到向量分数、边权、relation ID 以外的内部索引细节或检索调试原因。
+Hook 只向核心 HTTP 服务提交当前输入和会话信息，最近输入、检索冷却和 embedding 都在服务端处理。Hook 失败开放，不本地加载模型或数据库。MCP 是 stdio HTTP 薄代理，用于计划阶段主动搜索、读取细则和沿图探索。
 
-## 接入配置
-
-Codex 项目配置位于 `.codex/config.toml`，Hook 位于 `.codex/hooks.json`。Codex 官方要求首次运行非托管命令 Hook 时在 `/hooks` 审查和信任。管理 MCP 作为独立 server 默认注册，但进程固定为 `agent` 身份；它通过独立命令和权限环境供摄入 Agent 使用，不会因为模型传入参数而获得人工权限。
+embedding provider 由 TOML 配置为 `local`、`openai_compatible` 或 `none`。文档向量在后台生成；查询只编码当前 query 并读取已有 projection，缺失时退回词法检索。

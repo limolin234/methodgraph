@@ -1,0 +1,27 @@
+[client]
+server_url = "http://127.0.0.1:8765"
+timeout = 8
+
+[server]
+host = "127.0.0.1"
+port = 8765
+content_repo = "/srv/methodgraph/content"
+database = "/srv/methodgraph/runtime.db"
+push_remote = ""
+committer_name = "MethodGraph Server"
+committer_email = "methodgraph@lab.example"
+
+[embedding]
+# local, openai_compatible, or none
+provider = "local"
+model = "Qwen/Qwen3-Embedding-4B"
+device = "cuda"
+batch_size = 4
+
+# For an OpenAI-compatible embedding service, replace the fields above with:
+# provider = "openai_compatible"
+# model = "text-embedding-3-large"
+# base_url = "https://api.openai.com/v1"
+# api_key_env = "METHODGRAPH_EMBEDDING_API_KEY"
+# timeout = 30
+# batch_size = 32

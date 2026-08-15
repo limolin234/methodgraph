@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 from typing import Any
 
 from .models import MethodRecord, RelationRecord, SourceRecord
@@ -86,9 +87,11 @@ def _relation_brief(relation: RelationRecord, methods: dict[str, MethodRecord],
 
 
 class MethodGraphService:
-    def __init__(self, store: MethodGraphStore, retriever: MethodRetriever | None = None):
+    def __init__(self, store: MethodGraphStore, retriever: MethodRetriever | None = None,
+                 history_provider: Callable[[str, str, int], list[dict[str, Any]]] | None = None):
         self.store = store
         self.retriever = retriever or MethodRetriever(store)
+        self.history_provider = history_provider
 
     def methodology_search(
         self,
@@ -180,19 +183,24 @@ class MethodGraphService:
             source = self.store.get_source(ref)
             if source is None:
                 return {"kind": kind, "ref": ref, "found": False}
-            return {"kind": kind, "ref": ref, "found": True,
-                    "source": _full_source(source, content=mode in {"detail", "full"})}
+            result = {"kind": kind, "ref": ref, "found": True,
+                      "source": _full_source(source, content=mode in {"detail", "full"})}
+            if mode == "audit" and self.history_provider:
+                result["history"] = self.history_provider("source", source.source_id, 100)
+            return result
         raise ValueError("item kind must be method, relation, or source")
 
     def _audit(self, kind: str, object_id: str, revision_id: str,
                sources: list[SourceRecord | None]) -> dict[str, Any]:
-        history = self.store.history(kind=kind, object_ref=object_id, limit=100)
+        history = (self.history_provider(kind, object_id, 100) if self.history_provider
+                   else self.store.history(kind=kind, object_ref=object_id, limit=100))
         return {
             "current_revision_ref": revision_id,
             "sources": [_full_source(source) for source in sources if source],
             "history": [
                 {key: row[key] for key in ("revision_id", "operation", "transaction_id",
-                                            "actor", "actor_authority", "reason", "created_at")}
+                                            "actor", "actor_email", "actor_authority", "reason", "created_at")
+                 if key in row}
                 for row in history
             ],
         }

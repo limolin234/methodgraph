@@ -1,13 +1,6 @@
-# Merge this table into ~/.codex/config.toml or <project>/.codex/config.toml.
-# The HTTP service is shared with the UserPromptSubmit hook, so the embedding
-# model is loaded only once.
 [mcp_servers.methodgraph]
-url = "http://127.0.0.1:8765/mcp"
-required = false
-enabled_tools = [
-  "methodology_search",
-  "methodology_get",
-  "methodology_neighbors",
-]
-startup_timeout_sec = 20
-tool_timeout_sec = 60
+command = "methodgraph-mcp"
+enabled_tools = ["methodology_search", "methodology_get", "methodology_neighbors"]
+
+[mcp_servers.methodgraph_admin]
+command = "methodgraph-admin-mcp"

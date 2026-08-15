@@ -1,78 +1,83 @@
 # MethodGraph
 
-MethodGraph 是给长任务 Agent 使用的外部方法论层。它保存的是“面对什么问题、为什么采用某种处理方式、怎样处理、哲学基础和边界”，不是事实记忆，也不是工具 Skill。方法卡只要求 `title`；其余字段和第二层 `detail` 只有证据支持时才填写。
-
-## 运行时结构
-
-同一个只读服务同时服务两个入口：
+MethodGraph 是给长任务 Agent 使用的外部方法论层。它保存“什么时候用、为什么用、怎样处理、哲学基础和边界”，不是事实记忆，也不是工具 Skill。
 
 ```text
-Codex UserPromptSubmit Hook ─┐
-                              ├─> MethodGraph HTTP/SQLite ─> embedding + graph retrieval
-Codex/ChatGPT MCP tools ──────┘
+Codex/Claude Hook ─┐
+                    ├─> JSON HTTP service ─> SQLite query projection
+thin read MCP ──────┤                         ├─ embedding projection
+thin admin MCP ─────┘                         └─ activation/cooldown state
+                              |
+                              └─ Git content repository (only authority)
 ```
 
-运行时 MCP 只有三个工具：
+Git 仓库按对象存放 `methods/<id>.md`、`relations/<id>.md` 和 `sources/<id>.md`。SQLite 只保存可重建的结构化/embedding 投影和运行时冷却状态，永远不能覆盖 Git。写入顺序是校验、Git commit、可选 push、同步结构投影、后台补 embedding；查询不会临时重建全库索引。
 
-- `methodology_search(context, method_limit, neighbor_limit, exclude_recent, ...)`：语义/词法召回、有限一跳图扩展、去重、低相关过滤和会话冷却；返回方法卡、简短关系和紧凑来源。复杂规划、开放问题、方案取舍、非显然诊断和系统审查应在形成方案前主动搜索一次；若 Hook 已覆盖当前决策则不重复调用。
-- `methodology_get(items, mode)`：批量读取 `method`、`relation`、`source`。`detail` 只给新增细则，`full` 给完整内容，`audit` 给来源和修订历史。
-- `methodology_neighbors(method, context, limit, cursor)`：主动沿图探索邻居。
-
-管理 MCP (`methodgraph-admin-mcp`) 与运行时 MCP 分开。它提供来源、方法、关系的增改退役、历史、差异和恢复。进程环境中的 `METHODGRAPH_ACTOR_AUTHORITY=human|agent` 决定权限；Agent 不能修改或退役人工内容，来源永远按内容哈希不可变。退役是软删除，恢复会产生新修订。SQLite 事务、修订快照和审计日志负责追溯，不自造 Git DAG。
-
-## 安装与测试
-
-推荐使用已有的 micromamba 环境：
+## 安装
 
 ```bash
 micromamba activate methodgraph
-python -m pip install -e '.[mcp,embedding]'
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+python -m pip install -e '.[runtime]'
+cp integrations/config.toml.example ~/.config/methodgraph/config.toml
+methodgraph-server
 ```
 
-无 embedding 依赖也可以使用词法检索：
+不需要本地 embedding 时：
+
+```toml
+[embedding]
+provider = "none"
+model = "none"
+```
+
+使用 OpenAI-compatible `/embeddings` API 时：
+
+```toml
+[embedding]
+provider = "openai_compatible"
+model = "text-embedding-3-large"
+base_url = "https://api.openai.com/v1"
+api_key_env = "METHODGRAPH_EMBEDDING_API_KEY"
+batch_size = 32
+```
+
+配置文件只记录环境变量名，密钥放在服务进程环境中。完整示例见 [`integrations/config.toml.example`](integrations/config.toml.example)。
+
+## 迁移与运行
+
+首次从旧 SQLite 迁移：
 
 ```bash
-METHODGRAPH_DB=/path/to/methodgraph.db METHODGRAPH_EMBEDDING_MODEL=none methodgraph-mcp
+methodgraph --db /path/to/old.db migrate-git --content-repo /srv/methodgraph/content
+methodgraph --db /srv/methodgraph/runtime.db sync-git --content-repo /srv/methodgraph/content
 ```
 
-启用本地 Qwen embedding。服务会在后台线程中生成缺失或过期的 projection，查询阶段只读取已经生成的 projection；因此查询不会同步扫描全库或临时生成全部索引：
+迁移会把当前有效来源、方法和关系导出为一个 Git commit，再从 Git 重建投影。旧数据库应保留为迁移备份；历史回退使用新的 restore commit，不 reset 或 force-push。
+
+健康检查：
 
 ```bash
-METHODGRAPH_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B \
-METHODGRAPH_EMBEDDING_DEVICE=cuda \
-METHODGRAPH_DB=/path/to/methodgraph.db methodgraph-mcp
+curl http://127.0.0.1:8765/healthz
 ```
 
-默认每 60 秒检查一次新增和修订内容。可用环境变量调整：
+## 模型侧接口
+
+只读 MCP 有三个工具：
+
+- `methodology_search`：语义/词法召回、有限一跳图扩展、去重、低相关过滤和会话冷却。
+- `methodology_get`：批量读取方法、关系和来源的 detail/full/audit 内容。
+- `methodology_neighbors`：沿图主动探索。
+
+管理 MCP 提供来源、方法、关系的增改删、Git history 和 restore。每次写入使用客户端 `git config user.name/user.email` 作为 Author，服务身份作为 Committer；身份用于归因而非认证。当前版本适用于可信实验室网络，不应暴露到公网。
+
+Codex、Claude Code 和其他 Agent 的安装方式见 [`integrations/README.md`](integrations/README.md)。
+
+## 测试
 
 ```bash
-METHODGRAPH_INDEX_INTERVAL=60       # 秒，最小 10
-METHODGRAPH_INDEX_MODE=off          # off/manual/false 可关闭后台索引
+PYTHONPYCACHEPREFIX=/tmp/methodgraph-pycache \
+PYTHONPATH=src \
+python3 -m unittest discover -s tests -v
 ```
 
-也可以在部署前显式预生成索引：
-
-```bash
-methodgraph index --db /path/to/methodgraph.db \
-  --model Qwen/Qwen3-Embedding-4B --device cuda
-```
-
-后台索引失败不会阻塞服务；在 projection 尚未准备好时，检索自动退回词法检索，后台下一周期继续重试。
-
-HTTP 服务和 Codex 配置示例在 [`integrations/codex/`](integrations/codex/)；项目内的 `.codex/config.toml` 和 `.codex/hooks.json` 已指向 `127.0.0.1:8765` 与 Hook 命令。需要先启动 HTTP 服务，例如使用 `methodgraph.service.example` 的 user service。Codex 首次使用项目 Hook 时，在 `/hooks` 中审查并信任该命令。
-
-自动 Hook 默认以当前输入、同一会话最近两条原始用户输入以及 workspace/project 作为检索上下文，默认相关性门槛为 `0.22`。历史只保存原始用户输入，不把拼接后的检索串或此前注入内容递归加入上下文；可用 `METHODGRAPH_HOOK_MIN_SCORE` 覆盖门槛。
-
-没有 user service 的环境可以直接前台启动：
-
-```bash
-METHODGRAPH_DB=/path/to/methodgraph.db \
-METHODGRAPH_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B \
-METHODGRAPH_EMBEDDING_DEVICE=cuda \
-METHODGRAPH_TRANSPORT=streamable-http methodgraph-mcp
-```
-
-管理 MCP 现在也默认注册，但默认进程身份固定为 `ingestion-agent`/`agent`。它可供负责收集论文、书籍和论坛方法论的 Agent 使用；人工维护时应显式启动一个 `METHODGRAPH_ACTOR_AUTHORITY=human` 的管理进程。
-
-详细的字段、来源、关系、检索和回滚约束见 [`docs_graph/`](docs_graph/)。
+基础环境没有 `server` extra 时 HTTP 用例会跳过；安装 `runtime` extra 的部署环境应运行全部测试。

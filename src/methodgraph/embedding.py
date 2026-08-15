@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import math
+import json
+import os
 import threading
+import urllib.error
+import urllib.request
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
@@ -92,6 +96,60 @@ class SentenceTransformerBackend:
                 torch.cuda.empty_cache()
         except ImportError:
             return
+
+
+class OpenAICompatibleBackend:
+    """Embedding backend for OpenAI-compatible HTTP services."""
+
+    def __init__(self, *, model_name: str, base_url: str, api_key_env: str = "",
+                 timeout: float = 30.0, batch_size: int = 32):
+        if not base_url:
+            raise ValueError("embedding.base_url is required for openai_compatible")
+        self._model_name = model_name
+        self.base_url = base_url.rstrip("/")
+        self.api_key_env = api_key_env
+        self.timeout = timeout
+        self.batch_size = max(1, batch_size)
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    def _request(self, inputs: Sequence[str]) -> list[list[float]]:
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.api_key_env:
+            key = os.environ.get(self.api_key_env)
+            if not key:
+                raise RuntimeError(f"embedding API key environment variable is unset: {self.api_key_env}")
+            headers["Authorization"] = f"Bearer {key}"
+        request = urllib.request.Request(
+            f"{self.base_url}/embeddings",
+            data=json.dumps({"model": self.model_name, "input": list(inputs)}).encode("utf-8"),
+            headers=headers, method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"embedding API HTTP {exc.code}: {detail}") from exc
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list) or len(data) != len(inputs):
+            raise RuntimeError("embedding API returned an invalid data array")
+        ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
+        vectors = [item.get("embedding") for item in ordered]
+        if any(not isinstance(vector, list) or not vector for vector in vectors):
+            raise RuntimeError("embedding API returned an invalid vector")
+        return [[float(value) for value in vector] for vector in vectors]
+
+    def encode_query(self, text: str) -> Sequence[float]:
+        return self._request([text])[0]
+
+    def encode_documents(self, texts: Sequence[str]) -> Sequence[Sequence[float]]:
+        vectors: list[list[float]] = []
+        for offset in range(0, len(texts), self.batch_size):
+            vectors.extend(self._request(texts[offset:offset + self.batch_size]))
+        return vectors
 
 
 def _cosine(left: Sequence[float], right: Sequence[float]) -> float:

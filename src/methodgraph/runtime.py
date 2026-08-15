@@ -7,7 +7,9 @@ import threading
 import time
 from pathlib import Path
 
-from .embedding import LocalEmbeddingIndex, SentenceTransformerBackend
+from .config import AppConfig, load_config
+from .content import GitContentRepository
+from .embedding import LocalEmbeddingIndex, OpenAICompatibleBackend, SentenceTransformerBackend
 from .retrieval import MethodRetriever
 from .service import MethodGraphService
 from .store import MethodGraphStore
@@ -38,6 +40,39 @@ def build_service(
         store,
         MethodRetriever(store, vector_index=vector_index),
     )
+
+
+def build_configured_service(config: AppConfig | None = None) -> tuple[MethodGraphService, GitContentRepository]:
+    """Construct the authoritative server runtime and synchronize Git HEAD."""
+    config = config or load_config()
+    store = MethodGraphStore(Path(config.server.database).expanduser())
+    store.initialize()
+    content = GitContentRepository(
+        config.server.content_repo, committer_name=config.server.committer_name,
+        committer_email=config.server.committer_email, push_remote=config.server.push_remote,
+    )
+    content.initialize()
+    if content.head() and content.head() != store.indexed_commit():
+        try:
+            content.sync_projection(store)
+        except Exception:
+            # Keep the last valid projection available; /readyz reports the mismatch.
+            pass
+    vector_index = None
+    if config.embedding.provider == "local":
+        backend = SentenceTransformerBackend(config.embedding.model, device=config.embedding.device)
+        vector_index = LocalEmbeddingIndex(store, backend)
+    elif config.embedding.provider == "openai_compatible":
+        backend = OpenAICompatibleBackend(
+            model_name=config.embedding.model, base_url=config.embedding.base_url,
+            api_key_env=config.embedding.api_key_env, timeout=config.embedding.timeout,
+            batch_size=config.embedding.batch_size,
+        )
+        vector_index = LocalEmbeddingIndex(store, backend)
+    if vector_index is not None:
+        _start_background_indexer(store, vector_index)
+    return MethodGraphService(store, MethodRetriever(store, vector_index=vector_index),
+                              history_provider=content.history), content
 
 
 def _start_background_indexer(store: MethodGraphStore, index: LocalEmbeddingIndex) -> None:

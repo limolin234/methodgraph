@@ -18,6 +18,9 @@ __pycache__/
 *.tar
 *.tar.gz
 .codex/
+.env
+.env.*
+methodgraph-content/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/

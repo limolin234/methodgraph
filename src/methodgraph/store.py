@@ -176,7 +176,92 @@ class MethodGraphStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_mg_activation_session
                     ON mg_activation_events(session_id, occurred_at DESC);
+
+                CREATE TABLE IF NOT EXISTS mg_projection_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
+            )
+
+    def indexed_commit(self) -> str:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT value FROM mg_projection_state WHERE key='indexed_commit'"
+            ).fetchone()
+        return str(row[0]) if row else ""
+
+    def replace_projection(
+        self,
+        *,
+        sources: Sequence[SourceRecord],
+        methods: Sequence[MethodRecord],
+        relations: Sequence[RelationRecord],
+        indexed_commit: str,
+    ) -> None:
+        """Atomically replace Git-derived content while retaining runtime events."""
+        self.initialize()
+        method_ids = {item.method_id for item in methods}
+        source_ids = {item.source_id for item in sources}
+        if len(method_ids) != len(methods) or len(source_ids) != len(sources):
+            raise ValueError("duplicate object ids in content projection")
+        for method in methods:
+            missing = set(method.source_ids) - source_ids
+            if missing:
+                raise ValueError(f"method {method.method_id} references missing sources: {sorted(missing)}")
+        relation_ids: set[str] = set()
+        for relation in relations:
+            if relation.relation_id in relation_ids:
+                raise ValueError(f"duplicate relation id: {relation.relation_id}")
+            relation_ids.add(relation.relation_id)
+            if relation.method_a_id not in method_ids or relation.method_b_id not in method_ids:
+                raise ValueError(f"relation {relation.relation_id} references a missing method")
+            missing = set(relation.source_ids) - source_ids
+            if missing:
+                raise ValueError(f"relation {relation.relation_id} references missing sources: {sorted(missing)}")
+        with self._connect() as db:
+            db.execute("DELETE FROM mg_relations")
+            db.execute("DELETE FROM mg_methods")
+            db.execute("DELETE FROM mg_sources")
+            db.execute("DELETE FROM mg_revisions")
+            db.executemany(
+                """INSERT INTO mg_sources VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                [(s.source_id, s.kind, s.title, s.author, s.uri, s.published_at,
+                  s.locator, s.excerpt, s.captured_at, s.content_hash, s.content,
+                  _json(s.metadata)) for s in sources],
+            )
+            db.executemany(
+                """INSERT INTO mg_methods(
+                       method_id,title,when_text,why_text,how_text,philosophy,boundary,
+                       detail,revision_id,authority,scope,domains_json,project_ref,
+                       importance,created_at,updated_at,retired_at,created_by,
+                       source_ids_json,metadata_json
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?)""",
+                [self._method_values(item) for item in methods],
+            )
+            db.executemany(
+                """INSERT INTO mg_relations(
+                       relation_id,method_a_id,method_b_id,explanation,detail,weight,
+                       revision_id,authority,scope,project_ref,created_at,updated_at,
+                       retired_at,created_by,source_ids_json,metadata_json
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?)""",
+                [self._relation_values(item) for item in relations],
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO mg_projection_state(key,value) VALUES('indexed_commit',?)",
+                (indexed_commit,),
+            )
+            db.execute(
+                """DELETE FROM mg_embedding_projections
+                   WHERE (object_kind='method' AND NOT EXISTS (
+                       SELECT 1 FROM mg_methods m
+                       WHERE m.method_id=mg_embedding_projections.object_id
+                         AND m.revision_id=mg_embedding_projections.revision_id
+                   )) OR (object_kind='relation' AND NOT EXISTS (
+                       SELECT 1 FROM mg_relations r
+                       WHERE r.relation_id=mg_embedding_projections.object_id
+                         AND r.revision_id=mg_embedding_projections.revision_id
+                   ))"""
             )
 
     def add_source(

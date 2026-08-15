@@ -22,4 +22,6 @@ when -> why -> how -> philosophy -> boundary
 
 ## 治理字段
 
-方法和边独立保留 `authority`、`scope`、`domains`/`project_ref`、`importance`、创建/更新时间、创建者、来源和 revision。它们帮助过滤和审计，不改变方法语义。来源至少有类型、标题、作者、出版时间、URI、定位、摘录、抓取时间、内容哈希和原文。
+方法和边独立保留 `authority`、`scope`、`domains`/`project_ref`、`importance`、创建/更新时间、创建者和来源。它们帮助过滤和审计，不改变方法语义。Git blob revision 由服务内部计算，不作为模型字段。来源至少有类型、标题、作者、出版时间、URI、定位、摘录、抓取时间、内容哈希和原文；来源文件本身不可原地覆盖。
+
+方法、边和来源的权威内容位于服务端 Git 仓库；SQLite 只保存当前投影、embedding 和运行时激活状态。恢复通过新的 Git restore commit 完成，模型侧 `audit` 读取 Git history。

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import sys
-from typing import Any
-
+from .http_client import post_json
 from .runtime import build_service
 from .service import MethodGraphService
 
@@ -17,42 +15,12 @@ RECENT_PROMPT_LIMIT = 2
 PROMPT_CONTEXT_CHARS = 2000
 
 
-def _structured_result(result: Any) -> dict:
-    structured = getattr(result, "structuredContent", None)
-    if isinstance(structured, dict):
-        return structured
-    structured = getattr(result, "structured_content", None)
-    if isinstance(structured, dict):
-        return structured
-    for item in getattr(result, "content", []):
-        text = getattr(item, "text", None)
-        if text:
-            loaded = json.loads(text)
-            if isinstance(loaded, dict):
-                return loaded
-    return {}
-
-
-async def _search_remote(prompt: str, session_id: str | None, limit: int) -> dict:
-    try:
-        from mcp import Client
-    except ImportError as exc:
-        raise RuntimeError("remote hook mode requires the 'mcp' extra") from exc
-    url = os.environ.get("METHODGRAPH_MCP_URL", "http://127.0.0.1:8765/mcp")
-    async with Client(url, read_timeout_seconds=30) as client:
-        result = await client.call_tool(
-            "methodology_search",
-            {
-                "context": prompt,
-                "method_limit": limit,
-                "neighbor_limit": int(os.environ.get("METHODGRAPH_HOOK_NEIGHBOR_LIMIT", "2")),
-                "exclude_recent": True,
-                "session_id": session_id,
-                "project": os.environ.get("METHODGRAPH_PROJECT") or None,
-                "min_score": float(os.environ.get("METHODGRAPH_HOOK_MIN_SCORE", DEFAULT_HOOK_MIN_SCORE)),
-            },
-        )
-    return _structured_result(result)
+def _search_remote(payload: dict, limit: int) -> dict:
+    return post_json("/v1/hooks/retrieve", payload | {
+        "method_limit": limit,
+        "neighbor_limit": int(os.environ.get("METHODGRAPH_HOOK_NEIGHBOR_LIMIT", "2")),
+        "min_score": float(os.environ.get("METHODGRAPH_HOOK_MIN_SCORE", DEFAULT_HOOK_MIN_SCORE)),
+    })
 
 
 def _search_local(prompt: str, session_id: str | None, limit: int) -> dict:
@@ -116,16 +84,16 @@ def build_hook_output(payload: dict, *, allow_remote: bool = True) -> dict:
     if not prompt:
         return {}
     session_id = payload.get("session_id") or payload.get("turn_id")
-    search_context = _build_search_context(payload, prompt, session_id)
     limit = max(1, int(os.environ.get("METHODGRAPH_HOOK_LIMIT", "6")))
-    packet: dict = {}
     if allow_remote and os.environ.get("METHODGRAPH_HOOK_REMOTE", "1") != "0":
         try:
-            packet = asyncio.run(_search_remote(search_context, session_id, limit))
+            return _search_remote(payload, limit)
         except Exception as exc:
-            print(f"MethodGraph remote hook fallback: {exc}", file=sys.stderr)
-    if not packet.get("methods"):
-        packet = _search_local(search_context, session_id, limit)
+            print(f"MethodGraph remote hook skipped: {exc}", file=sys.stderr)
+            if os.environ.get("METHODGRAPH_HOOK_LOCAL_FALLBACK", "0") != "1":
+                return {}
+    search_context = _build_search_context(payload, prompt, session_id)
+    packet = _search_local(search_context, session_id, limit)
     context = MethodGraphService.render_injection(packet)
     if not context:
         return {}

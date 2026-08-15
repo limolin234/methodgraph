@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from .embedding import DEFAULT_EMBEDDING_MODEL, LocalEmbeddingIndex, SentenceTransformerBackend
+from .content import GitContentRepository, git_identity
 from .runtime import build_service
 from .store import MethodGraphStore
 
@@ -111,6 +112,11 @@ def _parser() -> argparse.ArgumentParser:
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=6)
     search.add_argument("--model", default=os.environ.get("METHODGRAPH_EMBEDDING_MODEL", "none"))
+    migrate = commands.add_parser("migrate-git", help="export the current SQLite content into the Git authority")
+    migrate.add_argument("--content-repo", default=os.environ.get("METHODGRAPH_CONTENT_REPO", "methodgraph-content"))
+    migrate.add_argument("--reason", default="import existing SQLite content")
+    sync = commands.add_parser("sync-git", help="rebuild the SQLite projection from Git HEAD")
+    sync.add_argument("--content-repo", default=os.environ.get("METHODGRAPH_CONTENT_REPO", "methodgraph-content"))
     return parser
 
 
@@ -135,6 +141,18 @@ def main() -> None:
             args.query, method_limit=args.limit
         )
         print(service.render_injection(packet))
+        return
+    if args.command == "migrate-git":
+        content = GitContentRepository(args.content_repo)
+        name, email = git_identity()
+        head = content.export_store(store, author_name=name, author_email=email, reason=args.reason)
+        sources, methods, relations = content.load()
+        print(json.dumps({"commit": head, "sources": len(sources), "methods": len(methods),
+                          "relations": len(relations)}, ensure_ascii=False))
+        return
+    if args.command == "sync-git":
+        content = GitContentRepository(args.content_repo)
+        print(json.dumps(content.sync_projection(store), ensure_ascii=False))
         return
     raise AssertionError(args.command)
 
