@@ -71,12 +71,27 @@ class SentenceTransformerBackend:
         if not texts:
             return []
         model = self._load()
-        options = {"normalize_embeddings": True, "show_progress_bar": False}
+        # Keep indexing peaks bounded; the model itself remains resident on the device.
+        options = {
+            "normalize_embeddings": True,
+            "show_progress_bar": False,
+            "batch_size": 4,
+        }
         if hasattr(model, "encode_document"):
             result = model.encode_document(list(texts), **options)
         else:
             result = model.encode(list(texts), **options)
         return [item.tolist() for item in result]
+
+    def clear_cuda_cache(self) -> None:
+        if self._model is None or self.device == "cpu":
+            return
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            return
 
 
 def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
@@ -101,8 +116,13 @@ class LocalEmbeddingIndex:
     def rebuild(self, *, force: bool = False) -> dict[str, int]:
         indexed = {"method": 0, "relation": 0}
         with self._write_lock:
-            self._index_methods(force=force, counter=indexed)
-            self._index_relations(force=force, counter=indexed)
+            try:
+                self._index_methods(force=force, counter=indexed)
+                self._index_relations(force=force, counter=indexed)
+            finally:
+                clear_cache = getattr(self.backend, "clear_cuda_cache", None)
+                if clear_cache is not None:
+                    clear_cache()
         return indexed
 
     def _index_methods(self, *, force: bool, counter: dict[str, int]) -> None:
