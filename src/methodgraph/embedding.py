@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
@@ -95,11 +96,13 @@ class LocalEmbeddingIndex:
     def __init__(self, store: MethodGraphStore, backend: EmbeddingBackend):
         self.store = store
         self.backend = backend
+        self._write_lock = threading.Lock()
 
     def rebuild(self, *, force: bool = False) -> dict[str, int]:
         indexed = {"method": 0, "relation": 0}
-        self._index_methods(force=force, counter=indexed)
-        self._index_relations(force=force, counter=indexed)
+        with self._write_lock:
+            self._index_methods(force=force, counter=indexed)
+            self._index_relations(force=force, counter=indexed)
         return indexed
 
     def _index_methods(self, *, force: bool, counter: dict[str, int]) -> None:
@@ -147,14 +150,12 @@ class LocalEmbeddingIndex:
             counter["relation"] += 1
 
     def search_methods(self, query: str, limit: int) -> Mapping[str, float]:
-        self.rebuild()
-        if not self.store.list_methods():
+        if not self.store.get_embeddings(object_kind="method", model=self.backend.model_name):
             return {}
         return self._search("method", query, limit)
 
     def search_relations(self, query: str, limit: int) -> Mapping[str, float]:
-        self.rebuild()
-        if not self.store.list_relations():
+        if not self.store.get_embeddings(object_kind="relation", model=self.backend.model_name):
             return {}
         return self._search("relation", query, limit)
 

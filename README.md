@@ -36,13 +36,29 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 METHODGRAPH_DB=/path/to/methodgraph.db METHODGRAPH_EMBEDDING_MODEL=none methodgraph-mcp
 ```
 
-启用本地 Qwen embedding（首次搜索会加载模型）：
+启用本地 Qwen embedding。服务会在后台线程中生成缺失或过期的 projection，查询阶段只读取已经生成的 projection；因此查询不会同步扫描全库或临时生成全部索引：
 
 ```bash
 METHODGRAPH_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B \
 METHODGRAPH_EMBEDDING_DEVICE=cuda \
 METHODGRAPH_DB=/path/to/methodgraph.db methodgraph-mcp
 ```
+
+默认每 60 秒检查一次新增和修订内容。可用环境变量调整：
+
+```bash
+METHODGRAPH_INDEX_INTERVAL=60       # 秒，最小 10
+METHODGRAPH_INDEX_MODE=off          # off/manual/false 可关闭后台索引
+```
+
+也可以在部署前显式预生成索引：
+
+```bash
+methodgraph index --db /path/to/methodgraph.db \
+  --model Qwen/Qwen3-Embedding-4B --device cuda
+```
+
+后台索引失败不会阻塞服务；在 projection 尚未准备好时，检索自动退回词法检索，后台下一周期继续重试。
 
 HTTP 服务和 Codex 配置示例在 [`integrations/codex/`](integrations/codex/)；项目内的 `.codex/config.toml` 和 `.codex/hooks.json` 已指向 `127.0.0.1:8765` 与 Hook 命令。需要先启动 HTTP 服务，例如使用 `methodgraph.service.example` 的 user service。Codex 首次使用项目 Hook 时，在 `/hooks` 中审查并信任该命令。
 

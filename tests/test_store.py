@@ -82,6 +82,29 @@ class StoreTest(unittest.TestCase):
         self.store.put_method(method_id=method.method_id, why="revised")
         self.assertEqual(self.store.get_embeddings(object_kind="method", model="fake"), {})
 
+    def test_embedding_projection_is_read_only_until_background_rebuild(self):
+        method, _ = self.store.put_method(**CARD)
+        self.store.put_embedding(object_kind="method", object_id=method.method_id,
+            revision_id=method.revision_id, model="fake", vector=[1.0, 0.0])
+
+        from methodgraph.embedding import LocalEmbeddingIndex
+
+        class Backend:
+            model_name = "fake"
+            document_calls = 0
+
+            def encode_query(self, text):
+                return [1.0, 0.0]
+
+            def encode_documents(self, texts):
+                self.document_calls += 1
+                raise AssertionError("query must not build missing projections")
+
+        backend = Backend()
+        scores = LocalEmbeddingIndex(self.store, backend).search_methods("boundary", 1)
+        self.assertEqual(scores, {method.method_id: 1.0})
+        self.assertEqual(backend.document_calls, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

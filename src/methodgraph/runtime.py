@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 from pathlib import Path
 
 from .embedding import LocalEmbeddingIndex, SentenceTransformerBackend
@@ -31,7 +33,26 @@ def build_service(
             device=os.environ.get("METHODGRAPH_EMBEDDING_DEVICE") or None,
         )
         vector_index = LocalEmbeddingIndex(store, backend)
+        _start_background_indexer(store, vector_index)
     return MethodGraphService(
         store,
         MethodRetriever(store, vector_index=vector_index),
     )
+
+
+def _start_background_indexer(store: MethodGraphStore, index: LocalEmbeddingIndex) -> None:
+    """Build projections outside request handling and refresh them periodically."""
+    if os.environ.get("METHODGRAPH_INDEX_MODE", "background").casefold() in {"off", "manual", "false"}:
+        return
+    interval = max(10, int(os.environ.get("METHODGRAPH_INDEX_INTERVAL", "60")))
+
+    def worker() -> None:
+        while True:
+            try:
+                index.rebuild()
+            except Exception:
+                # Retrieval remains available through lexical fallback; the next cycle retries.
+                pass
+            time.sleep(interval)
+
+    threading.Thread(target=worker, name="methodgraph-indexer", daemon=True).start()
