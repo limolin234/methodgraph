@@ -105,6 +105,20 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(scores, {method.method_id: 1.0})
         self.assertEqual(backend.document_calls, 0)
 
+    def test_empty_prompt_events_do_not_shorten_injection_cooldown(self):
+        method, _ = self.store.put_method(**CARD)
+        key = (method.method_id, method.revision_id)
+        self.store.record_activation(
+            query="initial", retrieved=[key], injected=[key],
+            session_id="session", channel="hook",
+        )
+        for index in range(40):
+            self.store.record_activation(
+                query=f"prompt {index}", retrieved=[], injected=[],
+                session_id="session", channel="hook_prompt",
+            )
+        self.assertIn(key, self.store.recent_injected_revision_keys("session"))
+
 
 if __name__ == "__main__":
     unittest.main()

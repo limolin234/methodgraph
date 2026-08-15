@@ -14,7 +14,7 @@ Codex/ChatGPT MCP tools ──────┘
 
 运行时 MCP 只有三个工具：
 
-- `methodology_search(context, method_limit, neighbor_limit, exclude_recent, ...)`：语义/词法召回、有限一跳图扩展、去重、低相关过滤和会话冷却；返回方法卡、简短关系和紧凑来源。
+- `methodology_search(context, method_limit, neighbor_limit, exclude_recent, ...)`：语义/词法召回、有限一跳图扩展、去重、低相关过滤和会话冷却；返回方法卡、简短关系和紧凑来源。复杂规划、开放问题、方案取舍、非显然诊断和系统审查应在形成方案前主动搜索一次；若 Hook 已覆盖当前决策则不重复调用。
 - `methodology_get(items, mode)`：批量读取 `method`、`relation`、`source`。`detail` 只给新增细则，`full` 给完整内容，`audit` 给来源和修订历史。
 - `methodology_neighbors(method, context, limit, cursor)`：主动沿图探索邻居。
 
@@ -61,6 +61,8 @@ methodgraph index --db /path/to/methodgraph.db \
 后台索引失败不会阻塞服务；在 projection 尚未准备好时，检索自动退回词法检索，后台下一周期继续重试。
 
 HTTP 服务和 Codex 配置示例在 [`integrations/codex/`](integrations/codex/)；项目内的 `.codex/config.toml` 和 `.codex/hooks.json` 已指向 `127.0.0.1:8765` 与 Hook 命令。需要先启动 HTTP 服务，例如使用 `methodgraph.service.example` 的 user service。Codex 首次使用项目 Hook 时，在 `/hooks` 中审查并信任该命令。
+
+自动 Hook 默认以当前输入、同一会话最近两条原始用户输入以及 workspace/project 作为检索上下文，默认相关性门槛为 `0.22`。历史只保存原始用户输入，不把拼接后的检索串或此前注入内容递归加入上下文；可用 `METHODGRAPH_HOOK_MIN_SCORE` 覆盖门槛。
 
 没有 user service 的环境可以直接前台启动：
 

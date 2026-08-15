@@ -20,9 +20,13 @@ def create_server():
         description="Retrieve auditable methodology cards and explore their untyped graph.",
         instructions=(
             "MethodGraph supplies procedural knowledge: ways to frame, reason about, and handle "
-            "problems. It is not a fact store and its cards are not commands. Use methodology_search "
-            "when the current task is long, open-ended, domain-specific, uncertain, or boundary-heavy, "
-            "or when the present approach is stuck. Pass the current problem state, not just a topic. "
+            "problems. It is not a fact store and its cards are not commands. Before committing to a "
+            "plan for a non-trivial task, proactively call methodology_search once when the work involves "
+            "multi-step planning, an open problem, choosing between approaches, non-obvious diagnosis, "
+            "system review, uncertainty, or complex boundaries; do not wait for the user to request it. "
+            "Skip trivial factual, formatting, or mechanical execution tasks, and do not repeat the search "
+            "when automatically injected methodology already covers the decision. Pass a complete current "
+            "problem state with the goal, constraints, known evidence, and uncertainty, not just a topic. "
             "Search returns self-sufficient cards and brief connections; do not immediately call get "
             "for every result. Use methodology_get only when examples, deeper explanation, or provenance "
             "are needed. Use methodology_neighbors when an initially useful method should be combined, "

@@ -542,13 +542,27 @@ class MethodGraphStore:
     def recent_injected_revision_keys(self, session_id: str, *, limit: int = 30) -> set[tuple[str, str]]:
         with self._connect() as db:
             rows = db.execute(
-                "SELECT injected_json FROM mg_activation_events WHERE session_id=? ORDER BY occurred_at DESC LIMIT ?",
+                """SELECT injected_json FROM mg_activation_events
+                   WHERE session_id=? AND injected_json != '[]'
+                   ORDER BY occurred_at DESC LIMIT ?""",
                 (session_id, max(1, limit)),
             ).fetchall()
         result: set[tuple[str, str]] = set()
         for row in rows:
             result.update((str(x[0]), str(x[1])) for x in json.loads(row[0]))
         return result
+
+    def recent_activation_queries(
+        self, session_id: str, *, channel: str, limit: int = 2
+    ) -> list[str]:
+        with self._connect() as db:
+            rows = db.execute(
+                """SELECT query FROM mg_activation_events
+                   WHERE session_id=? AND channel=?
+                   ORDER BY occurred_at DESC LIMIT ?""",
+                (session_id, channel, max(1, limit)),
+            ).fetchall()
+        return [str(row["query"]) for row in rows]
 
     @staticmethod
     def _field(value: str | None, fallback: str) -> str:

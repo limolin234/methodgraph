@@ -11,6 +11,11 @@ from typing import Any
 from .runtime import build_service
 from .service import MethodGraphService
 
+HOOK_PROMPT_CHANNEL = "hook_prompt"
+DEFAULT_HOOK_MIN_SCORE = "0.22"
+RECENT_PROMPT_LIMIT = 2
+PROMPT_CONTEXT_CHARS = 2000
+
 
 def _structured_result(result: Any) -> dict:
     structured = getattr(result, "structuredContent", None)
@@ -44,7 +49,7 @@ async def _search_remote(prompt: str, session_id: str | None, limit: int) -> dic
                 "exclude_recent": True,
                 "session_id": session_id,
                 "project": os.environ.get("METHODGRAPH_PROJECT") or None,
-                "min_score": float(os.environ.get("METHODGRAPH_HOOK_MIN_SCORE", "0.16")),
+                "min_score": float(os.environ.get("METHODGRAPH_HOOK_MIN_SCORE", DEFAULT_HOOK_MIN_SCORE)),
             },
         )
     return _structured_result(result)
@@ -60,9 +65,50 @@ def _search_local(prompt: str, session_id: str | None, limit: int) -> dict:
         session_id=session_id,
         exclude_recent=True,
         project=os.environ.get("METHODGRAPH_PROJECT") or None,
-        min_score=float(os.environ.get("METHODGRAPH_HOOK_MIN_SCORE", "0.16")),
+        min_score=float(os.environ.get("METHODGRAPH_HOOK_MIN_SCORE", DEFAULT_HOOK_MIN_SCORE)),
         channel="hook",
     )
+
+
+def _build_search_context(payload: dict, prompt: str, session_id: str | None) -> str:
+    recent: list[str] = []
+    if session_id:
+        try:
+            service = build_service(embedding_model="none")
+            recent = service.store.recent_activation_queries(
+                str(session_id), channel=HOOK_PROMPT_CHANNEL, limit=RECENT_PROMPT_LIMIT
+            )
+            service.store.record_activation(
+                query=prompt,
+                retrieved=[],
+                injected=[],
+                session_id=str(session_id),
+                channel=HOOK_PROMPT_CHANNEL,
+                metadata={"turn_id": payload.get("turn_id")},
+            )
+        except Exception:
+            # Context enrichment must not make the prompt hook fail.
+            recent = []
+
+    seen = {prompt}
+    previous: list[str] = []
+    for item in recent:
+        cleaned = item.strip()
+        if cleaned and cleaned not in seen:
+            previous.append(cleaned[:PROMPT_CONTEXT_CHARS])
+            seen.add(cleaned)
+
+    sections = [f"Current user request:\n{prompt}"]
+    if previous:
+        sections.append("Recent user requests:\n" + "\n".join(f"- {item}" for item in previous))
+    scope = []
+    if cwd := str(payload.get("cwd") or "").strip():
+        scope.append(f"workspace={cwd}")
+    if project := os.environ.get("METHODGRAPH_PROJECT"):
+        scope.append(f"project={project}")
+    if scope:
+        sections.append("Task scope: " + "; ".join(scope))
+    return "\n\n".join(sections)
 
 
 def build_hook_output(payload: dict, *, allow_remote: bool = True) -> dict:
@@ -70,15 +116,16 @@ def build_hook_output(payload: dict, *, allow_remote: bool = True) -> dict:
     if not prompt:
         return {}
     session_id = payload.get("session_id") or payload.get("turn_id")
+    search_context = _build_search_context(payload, prompt, session_id)
     limit = max(1, int(os.environ.get("METHODGRAPH_HOOK_LIMIT", "6")))
     packet: dict = {}
     if allow_remote and os.environ.get("METHODGRAPH_HOOK_REMOTE", "1") != "0":
         try:
-            packet = asyncio.run(_search_remote(prompt, session_id, limit))
+            packet = asyncio.run(_search_remote(search_context, session_id, limit))
         except Exception as exc:
             print(f"MethodGraph remote hook fallback: {exc}", file=sys.stderr)
     if not packet.get("methods"):
-        packet = _search_local(prompt, session_id, limit)
+        packet = _search_local(search_context, session_id, limit)
     context = MethodGraphService.render_injection(packet)
     if not context:
         return {}

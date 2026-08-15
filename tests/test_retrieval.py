@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from methodgraph.hook import build_hook_output
+from methodgraph.hook import _build_search_context, build_hook_output
 from methodgraph.retrieval import MethodRetriever
 from methodgraph.service import MethodGraphService
 from methodgraph.store import MethodGraphStore
@@ -113,6 +113,32 @@ class RetrievalTest(unittest.TestCase):
         self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")
         self.assertIn("## 问题定义", output["hookSpecificOutput"]["additionalContext"])
         self.assertEqual(empty, {})
+
+    def test_hook_search_context_uses_recent_raw_prompts_without_recursion(self):
+        previous = os.environ.get("METHODGRAPH_DB")
+        os.environ["METHODGRAPH_DB"] = str(self.db_path)
+        try:
+            first = _build_search_context(
+                {"turn_id": "t1", "cwd": "/workspace/demo"}, "讨论检索门控", "session-context"
+            )
+            second = _build_search_context(
+                {"turn_id": "t2", "cwd": "/workspace/demo"}, "可以继续", "session-context"
+            )
+            third = _build_search_context(
+                {"turn_id": "t3", "cwd": "/workspace/demo"}, "现在实现", "session-context"
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("METHODGRAPH_DB", None)
+            else:
+                os.environ["METHODGRAPH_DB"] = previous
+
+        self.assertNotIn("Recent user requests", first)
+        self.assertIn("讨论检索门控", second)
+        self.assertIn("可以继续", third)
+        self.assertIn("讨论检索门控", third)
+        self.assertEqual(third.count("Current user request:"), 1)
+        self.assertIn("workspace=/workspace/demo", third)
 
 
 if __name__ == "__main__":
