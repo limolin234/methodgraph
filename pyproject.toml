@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "methodgraph"
+version = "0.1.0"
+description = "A versioned methodology graph for dynamic procedural retrieval"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp>=2.0,<3"]
+embedding = ["sentence-transformers>=5.1,<6"]
+runtime = ["mcp>=2.0,<3", "sentence-transformers>=5.1,<6"]
+
+[project.scripts]
+methodgraph = "methodgraph.cli:main"
+methodgraph-mcp = "methodgraph.mcp_server:main"
+methodgraph-admin-mcp = "methodgraph.admin_mcp_server:main"
+methodgraph-hook = "methodgraph.hook:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/methodgraph"]

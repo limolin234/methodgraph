@@ -1,0 +1,18 @@
+{
+  "description": "Inject relevant MethodGraph cards before each Codex turn.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/methodgraph-env/bin/methodgraph-hook",
+            "timeout": 35,
+            "statusMessage": "Retrieving methodologies",
+            "additionalContextLimit": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
